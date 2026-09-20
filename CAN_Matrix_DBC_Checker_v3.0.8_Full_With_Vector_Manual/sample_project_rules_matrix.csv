@@ -1,0 +1,6 @@
+报文ID,报文名称,DLC,发送节点,接收节点,周期时间,发送类型,帧格式,信号名称,起始位,信号长度,字节序,符号类型,精度,偏移量,最小值,最大值
+0x500,NM_Test,8,BCM,VCU,0,Event,CAN_Standard,NM_Data,0,8,Intel,无符号,1,0,0,255
+0x6FD,XCP_Test,8,BCM,VCU,0,Event,CAN_Standard,XCP_Data,0,8,Intel,无符号,1,0,0,255
+0x300,CANFD_Bad,10,BCM,VCU,20,Cyclic,CAN_FD_Standard,FD_Data,0,8,Intel,无符号,1,0,0,255
+0x301,Default_Cyclic,8,BCM,VCU,10,Cyclic,CAN_Standard,Default_Data,0,8,Intel,无符号,1,0,0,255
+0x302,Node_Ref_Bad,8,BCM,MissingNode,10,Cyclic,CAN_Standard,Node_Data,0,8,Intel,无符号,1,0,0,255

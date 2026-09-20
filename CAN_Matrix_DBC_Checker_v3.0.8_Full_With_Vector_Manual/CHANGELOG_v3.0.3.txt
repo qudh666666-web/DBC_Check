@@ -1,0 +1,8 @@
+v3.0.3
+
+1. E2EDataLength 建议值由“优先整帧 DLC×8”改为“优先 SignalGroup 实际字节跨度×8”。
+2. 单一 SignalGroup：直接给出候选 bit 值、PDU 字节范围和对应 Byte 数。
+3. 多 SignalGroup：逐组列出候选值，提示结合 E2E 映射确认。
+4. 无 SignalGroup：保留 DLC×8 作为低置信度兜底。
+5. 提示可用生成代码 transformationBuffer[N] 的 N×8 复核。
+6. 其他 Vector 手册规则、项目培训规则、矩阵对比逻辑不变。

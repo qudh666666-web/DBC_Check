@@ -1,0 +1,136 @@
+{
+  "version": 5,
+  "description": "项目培训覆盖规则。Vector Technical Reference v1.12作为内置基线，本文件只保存项目特定的NM、UDS、XCP及经验规则。",
+  "rules": [
+    {
+      "id": "NM_PROJECT_001",
+      "enabled": true,
+      "severity": "错误",
+      "target": "DBC",
+      "type": "project_nm_message",
+      "name_regex": "(?i)(^|[_\\-])(can)?nm([_\\-]|$)|network\\s*management",
+      "allowed_send_types": [
+        "Cyclic"
+      ],
+      "require_positive_cycle": true,
+      "nm_attribute_names": [
+        "NmMessage",
+        "NMAsrMessage",
+        "NmhMessage"
+      ],
+      "field_name": "NM属性",
+      "description": "按当前项目准出规范，NM报文应显式配置为Cyclic、周期大于0，并设置NM标识属性。"
+    },
+    {
+      "id": "UDS_REQUEST_PROJECT_001",
+      "enabled": true,
+      "severity": "错误",
+      "target": "DBC",
+      "type": "project_diag_message",
+      "name_regex": "(?i)(diag|diagnostic|uds|obd|isotp|iso.?tp)",
+      "request_only": true,
+      "request_attribute_names": [
+        "DiagRequest"
+      ],
+      "request_name_regex": "(?i)(req|request|diagreq|obdreq|udsreq)",
+      "allowed_send_types": [
+        "NotUsed"
+      ],
+      "expected_cycle": 0,
+      "require_explicit_send_type": true,
+      "require_explicit_cycle": true,
+      "require_connection": true,
+      "connection_attribute_names": [
+        "diagConnection",
+        "DiagConnection"
+      ],
+      "expected_connection": 57345,
+      "require_explicit_connection": true,
+      "field_name": "UDS接收报文属性",
+      "description": "按培训项目规范，UDS接收请求报文应显式配置GenMsgCycleTime=0、GenMsgSendType=NotUsed、diagConnection=57345。"
+    },
+    {
+      "id": "XCP_PROJECT_001",
+      "enabled": true,
+      "severity": "错误",
+      "target": "DBC",
+      "type": "project_xcp_message",
+      "name_regex": "(?i)(^|[_\\-])xcp([_\\-]|$)",
+      "forbidden_explicit_attributes": [
+        "GenMsgCycleTime"
+      ],
+      "field_name": "XCP周期属性",
+      "description": "XCP报文不应显式配置GenMsgCycleTime，避免被周期性持续发送。"
+    },
+    {
+      "id": "ALIVE_COUNTER_001",
+      "enabled": true,
+      "severity": "提示",
+      "target": "DBC",
+      "type": "signal_name_length_range",
+      "name_regex": "(?i)(alive.*counter|rolling.*counter|message.*counter|(^|[_\\-])(alv|alive|cnt|counter)([_\\-]|$))",
+      "min_length": 2,
+      "max_length": 8,
+      "field_name": "信号长度",
+      "description": "疑似Alive Counter信号的位宽不在常见2~8 bit范围内，请按项目E2E规范确认。"
+    },
+    {
+      "id": "CRC_CHECKSUM_001",
+      "enabled": true,
+      "severity": "提示",
+      "target": "DBC",
+      "type": "signal_name_length_allowed",
+      "name_regex": "(?i)(crc|checksum|check_sum|check-sum)",
+      "allowed_lengths": [
+        8,
+        16,
+        32
+      ],
+      "field_name": "信号长度",
+      "description": "疑似CRC/Checksum信号的位宽不是常见8/16/32 bit，请按实际算法确认。"
+    },
+    {
+      "id": "E2E_REQUIRED_001",
+      "enabled": true,
+      "severity": "警告",
+      "target": "DBC",
+      "type": "message_name_require_signal_patterns",
+      "name_regex": "(?i)(^|[_\\-])e2e([_\\-]|$)|end.?to.?end",
+      "required_signal_patterns": [
+        "(?i)(crc|checksum)",
+        "(?i)(alive.*counter|rolling.*counter|(^|[_\\-])(cnt|counter)([_\\-]|$))"
+      ],
+      "field_name": "E2E组成",
+      "description": "报文名称或描述疑似E2E报文，但未同时找到CRC和Counter类信号。"
+    },
+    {
+      "id": "BOOL_SIGNAL_001",
+      "enabled": true,
+      "severity": "提示",
+      "target": "DBC",
+      "type": "signal_binary_enum_length",
+      "field_name": "信号长度",
+      "description": "该信号枚举仅定义0和1，但位宽不是1 bit；请确认是否为预留编码。"
+    },
+    {
+      "id": "PROJECT_CYCLE_TIME_001",
+      "enabled": false,
+      "severity": "警告",
+      "target": "DBC",
+      "type": "message_cycle_allowed",
+      "name_regex": ".*",
+      "allowed_cycle_times": [
+        5,
+        10,
+        20,
+        50,
+        100,
+        200,
+        500,
+        1000
+      ],
+      "field_name": "周期时间",
+      "description": "周期时间不在项目允许列表中。确认项目规范后再启用。"
+    }
+  ]
+}

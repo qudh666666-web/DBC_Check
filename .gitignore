@@ -1,0 +1,21 @@
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# IDE and local machine state
+.idea/
+.vscode/
+
+# Temporary and generated validation artifacts
+*.tmp
+*.temp
+*.bak
+test_artifacts/
+validation_output/
+reports_output/
+
+# Local runtime logs
+*.log

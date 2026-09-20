@@ -1,0 +1,16 @@
+CAN矩阵-DBC一致性检查工具 v3.0.8 完整包
+
+包含：
+1. can_matrix_checker.py              完整主程序
+2. can_rules.json                     项目规则配置
+3. run_checker.bat                    Windows启动脚本
+4. requirements.txt                   Python依赖
+5. README.md / RULES_GUIDE.md         使用与规则说明
+6. VECTOR_MANUAL_RULES.md             Vector手册规则说明
+7. sample*.dbc / sample*.csv          测试样例
+8. docs/TechnicalReference_DbcRules_Vector.pdf
+                                      Vector《Rules for Legacy Communication Descriptions》Version 1.12 原PDF
+
+运行：
+- 安装依赖：pip install -r requirements.txt
+- 双击 run_checker.bat 或执行 python can_matrix_checker.py

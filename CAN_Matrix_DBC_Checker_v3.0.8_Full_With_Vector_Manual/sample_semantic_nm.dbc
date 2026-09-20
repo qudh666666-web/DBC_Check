@@ -1,0 +1,15 @@
+VERSION ""
+NS_ :
+    BA_DEF_
+    BA_
+BS_:
+BU_: BCM VCU
+BO_ 1280 NM_BCM: 8 BCM
+ SG_ CBV : 0|8@1+ (1,0) [0|255] "" VCU
+ SG_ NodeId : 8|8@1+ (1,0) [0|255] "" VCU
+BA_DEF_ BO_ "GenMsgSendType" ENUM "Cyclic","Event","NotUsed";
+BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535;
+BA_DEF_ BO_ "NmMessage" ENUM "No","Yes";
+BA_ "GenMsgSendType" BO_ 1280 1;
+BA_ "GenMsgCycleTime" BO_ 1280 0;
+BA_ "NmMessage" BO_ 1280 1;

@@ -1,0 +1,24 @@
+VERSION ""
+
+NS_ :
+    CM_
+    BA_DEF_
+    BA_
+    VAL_
+
+BS_:
+
+BU_: BCM VCU
+
+BO_ 1312 BCM_Status: 8 BCM
+ SG_ Door_FL_Status : 0|2@1+ (1,0) [0|3] "" VCU
+ SG_ VehicleSpeed : 8|16@1+ (0.01,0) [0|655.35] "km/h" VCU
+
+BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535;
+BA_DEF_ BO_ "GenMsgSendType" ENUM "Cyclic","Event","NotUsed";
+BA_ "GenMsgCycleTime" BO_ 1312 100;
+BA_ "GenMsgSendType" BO_ 1312 0;
+BA_DEF_ SG_ "GenSigStartValue" FLOAT -100000000000 100000000000;
+BA_ "GenSigStartValue" SG_ 1312 Door_FL_Status 0;
+BA_ "GenSigStartValue" SG_ 1312 VehicleSpeed 0;
+VAL_ 1312 Door_FL_Status 0 "Closed" 1 "Open" 2 "Error" 3 "Invalid" ;

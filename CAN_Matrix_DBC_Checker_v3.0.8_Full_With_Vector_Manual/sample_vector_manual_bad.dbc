@@ -1,0 +1,32 @@
+VERSION "Vector manual rules negative sample"
+NS_ :
+BS_:
+BU_: ECU RX
+
+BA_DEF_ "BusType" STRING ;
+BA_DEF_ BO_ "VFrameFormat" ENUM "CAN Standard","CAN Extended","CAN FD Standard","CAN FD Extended";
+BA_DEF_ BO_ "GenMsgILSupport" ENUM "No","Yes";
+BA_DEF_ BO_ "GenMsgNrOfRepetition" INT 0 255;
+BA_DEF_ BO_ "GenMsgCycleTimeFast" INT 0 65535;
+BA_DEF_ SG_ "GenSigSendType" ENUM "Cyclic","OnWrite","OnWriteWithRepetition","OnChange","OnChangeWithRepetition","NotUsed","NotUsed","NoSigSendType";
+BA_DEF_DEF_ "BusType" "CAN";
+BA_DEF_DEF_ "VFrameFormat" 0;
+BA_DEF_DEF_ "GenMsgILSupport" 1;
+BA_DEF_DEF_ "GenMsgNrOfRepetition" 0;
+BA_DEF_DEF_ "GenMsgCycleTimeFast" 0;
+BA_DEF_DEF_ "GenSigSendType" 7;
+
+BO_ 256 AppMsg: 12 ECU
+ SG_ LongOnChange : 0|40@1+ (1,0) [0|1099511627775] "" RX
+ SG_ AppData : 40|8@1+ (1,0) [0|255] "" RX
+ SG_ AppData_UB : 48|2@1+ (1,0) [0|3] "" RX
+BA_ "VFrameFormat" BO_ 256 2;
+BA_ "GenMsgILSupport" BO_ 256 1;
+BA_ "GenMsgNrOfRepetition" BO_ 256 2;
+BA_ "GenMsgCycleTimeFast" BO_ 256 0;
+BA_ "GenSigSendType" SG_ 256 LongOnChange 3;
+BA_ "GenSigSendType" SG_ 256 AppData_UB 1;
+
+BO_ 512 XCP_Bad: 8 ECU
+ SG_ PartialPayload : 0|32@1+ (1,0) [0|4294967295] "" RX
+BA_ "GenMsgILSupport" BO_ 512 1;

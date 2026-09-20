@@ -1,0 +1,8 @@
+v3.0.6
+- 新增“E2E ID表”选择入口，支持 .xlsx/.xlsm/.csv。
+- 自动识别客户常见布局：TX | DATA ID | Rx | DATAID；一张表可同时读取TX和Rx两组映射。
+- 导入 SignalGroup -> E2E Data ID 后，与DBC中的SignalGroup/E2EDataId自动核对。
+- 检查：客户表重复冲突、SignalGroup缺失/重名、E2EDataId缺失、多个DataID冲突、客户ID与DBC ID不一致。
+- 结果同时显示十六进制和十进制Data ID，并在不一致时给出客户表建议值。
+- Data ID为“-”或空白时仅提示并跳过数值核对。
+- 新增“查看E2E映射”，显示程序识别的工作表和列映射。

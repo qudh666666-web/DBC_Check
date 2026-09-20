@@ -1,0 +1,4 @@
+TX,DATA ID,Rx,DATAID
+BrkAssSigGrp,0x070A,LonAccrSigGrp,0x0103
+BcpSysStsSigGrp,0x062D,DrvCn3FrwADDSigGrp,0x0642
+BcpSysStateGrp,0x0730,BcsSysCtrSigGrp,0x0628
