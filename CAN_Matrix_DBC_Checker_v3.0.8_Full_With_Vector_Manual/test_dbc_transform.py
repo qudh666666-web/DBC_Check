@@ -6,8 +6,10 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from dbc_transform import (
+    apply_dbc_repair_plan,
     apply_node_completion,
     apply_rename_plan,
+    build_dbc_repair_plan,
     build_node_completion_plan,
     build_rename_plan,
     default_rename_config,
@@ -117,6 +119,44 @@ class DbcTransformTests(unittest.TestCase):
             rule_ids = {item.rule_id for item in checker.self_check_database(db, "DBC")}
             self.assertIn("DBC_NODE_REF_001", rule_ids)
             self.assertIn("DBC_NODE_REF_002", rule_ids)
+
+    def test_undefined_attribute_is_reported_and_only_removed_after_confirmation(self) -> None:
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "bad_attribute.dbc"
+            target = Path(tmp) / "repaired_attribute.dbc"
+            source.write_text(
+                'VERSION ""\nNS_ :\nBS_:\nBU_: TX\n'
+                'BO_ 257 Msg: 8 TX\n SG_ Sig : 0|8@1+ (1,0) [0|255] "" TX\n'
+                'BA_DEF_ BO_ "KnownAttr" INT 0 10;\n'
+                'BA_ "KnownAttr" BO_ 257 1;\n'
+                'BA_ "UnknownAttr" BO_ 257 1;\n',
+                encoding="utf-8",
+            )
+            plan = build_dbc_repair_plan(str(source))
+            self.assertEqual([(item.attribute_name, item.line_number) for item in plan.items], [("UnknownAttr", 9)])
+            with self.assertRaises(ValueError):
+                apply_dbc_repair_plan(plan, str(target))
+            saved, applied = apply_dbc_repair_plan(plan, str(target), remove_undefined_attributes=True)
+            self.assertEqual(saved, str(target))
+            self.assertEqual(len(applied), 1)
+            self.assertIn('BA_ "UnknownAttr"', source.read_text(encoding="utf-8"))
+            self.assertNotIn('BA_ "UnknownAttr"', target.read_text(encoding="utf-8"))
+            repaired_rules = {item.rule_id for item in checker.self_check_database(checker.parse_dbc(str(target)), "DBC")}
+            self.assertNotIn("DBC_ATTR_UNDEFINED_001", repaired_rules)
+
+    def test_malformed_attribute_assignment_is_reported_as_dbc_syntax(self) -> None:
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "malformed_attribute.dbc"
+            source.write_text(
+                'VERSION ""\nNS_ :\nBS_:\nBU_: TX\n'
+                'BO_ 257 Msg: 8 TX\n SG_ Sig : 0|8@1+ (1,0) [0|255] "" TX\n'
+                'BA_ "KnownAttr" BO_ 257;\n',
+                encoding="utf-8",
+            )
+            db = checker.parse_dbc(str(source))
+            syntax = [item for item in checker.self_check_database(db, "DBC") if item.rule_id == "DBC_SYNTAX_001"]
+            self.assertEqual(len(syntax), 1)
+            self.assertIn("BA_", syntax[0].description)
 
 
 if __name__ == "__main__":

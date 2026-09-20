@@ -48,8 +48,10 @@ except ImportError:  # pragma: no cover - 允许无GUI环境运行核心解析/�
     ttk = None
 
 from dbc_transform import (
+    apply_dbc_repair_plan,
     apply_node_completion,
     apply_rename_plan,
+    build_dbc_repair_plan,
     build_node_completion_plan,
     build_rename_plan,
     default_rename_config,
@@ -1851,6 +1853,24 @@ def parse_dbc(path: str, progress: Optional[Callable[[str], None]] = None) -> Da
     value_pair_re = re.compile(r'(-?\d+)\s+"([^"]*)"')
     sig_group_re = re.compile(r'^\s*SIG_GROUP_\s+(\d+)\s+(\S+)\s+\d+\s*:\s*(.*?)\s*;\s*$')
 
+    # BA_/BA_DEF_ 是 CANdb++ 导入时常见的停止点。以前自定义解析器会静默
+    # 跳过格式错误的属性语句，导致界面无法指出实际行号。
+    for line_no, line in enumerate(lines, start=1):
+        if re.match(r"^\s*BA_DEF_\s+\S", line) and not ba_def_re.match(line):
+            syntax_issues.append((line_no, "BA_DEF_", line.strip()))
+        elif re.match(r"^\s*BA_DEF_DEF_\s+\S", line) and not ba_default_re.match(line):
+            syntax_issues.append((line_no, "BA_DEF_DEF_", line.strip()))
+        elif re.match(r'^\s*BA_\s+"', line):
+            global_match = ba_global_re.match(line)
+            recognized = bool(
+                ba_bo_re.match(line)
+                or ba_sg_re.match(line)
+                or ba_bu_re.match(line)
+                or (global_match and not re.match(r"^(?:BO_|SG_|BU_|EV_)\b", global_match.group(2).strip()))
+            )
+            if not recognized:
+                syntax_issues.append((line_no, "BA_", line.strip()))
+
     def messages_for_id(raw_id: int) -> List[Message]:
         candidates = message_by_raw_id.get(raw_id, [])
         seen: set[int] = set()
@@ -1896,11 +1916,15 @@ def parse_dbc(path: str, progress: Optional[Callable[[str], None]] = None) -> Da
         if match:
             attr, raw_id, raw_value = match.group(1), int(match.group(2)), match.group(3).strip()
             decoded = decode_attribute("BO", attr, raw_value)
-            for msg in messages_for_id(raw_id):
+            targets = messages_for_id(raw_id)
+            for msg in targets:
                 key = attr.lower()
                 msg.attributes[key] = decoded
                 msg.explicit_attributes.add(key)
-                attribute_usages.append(AttributeUsage(attr, "BO", msg.name, msg.can_id, "", raw_value, decoded, line_no))
+            attribute_usages.append(AttributeUsage(
+                attr, "BO", targets[0].name if targets else f"BO_ {raw_id}",
+                raw_id & 0x1FFFFFFF, "", raw_value, decoded, line_no,
+            ))
             continue
 
         match = ba_sg_re.match(line)
@@ -1912,7 +1936,10 @@ def parse_dbc(path: str, progress: Optional[Callable[[str], None]] = None) -> Da
                 key = attr.lower()
                 sig.attributes[key] = decoded
                 sig.explicit_attributes.add(key)
-                attribute_usages.append(AttributeUsage(attr, "SG", sig.name, raw_id & 0x1FFFFFFF, sig.name, raw_value, decoded, line_no))
+            attribute_usages.append(AttributeUsage(
+                attr, "SG", sig.name if sig else f"SG_ {raw_id} {sig_name}",
+                raw_id & 0x1FFFFFFF, sig_name, raw_value, decoded, line_no,
+            ))
             continue
 
         match = ba_bu_re.match(line)
@@ -3766,6 +3793,7 @@ class CheckerApp:
         self.fix_e2e_button.pack(side="left", padx=4)
         ttk.Button(button_frame, text="命名设置", command=self.open_naming_tool).pack(side="left", padx=4)
         ttk.Button(button_frame, text="节点补全", command=self.open_node_completion).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="属性修正", command=self.open_attribute_repair).pack(side="left", padx=4)
         ttk.Button(button_frame, text="查看列映射", command=self.show_mapping).pack(side="left", padx=4)
 
         ttk.Label(top, text="E2E ID表：").grid(row=2, column=0, sticky="w", pady=4)
@@ -4299,6 +4327,67 @@ class CheckerApp:
             return
         self.status_var.set(f"节点补全完成：已另存 {Path(saved_path).name}，补入 {len(nodes)} 个节点。")
         messagebox.showinfo("节点补全完成", f"已保存：\n{saved_path}\n\n补入节点：{', '.join(nodes)}")
+
+    def open_attribute_repair(self) -> None:
+        """预览并在用户确认后移除没有 BA_DEF_ 的属性赋值。"""
+        dbc_path = self.dbc_path.get().strip()
+        if not dbc_path or not os.path.isfile(dbc_path):
+            dbc_path = filedialog.askopenfilename(title="选择用于属性修正的 DBC 文件", filetypes=[("DBC文件", "*.dbc"), ("所有文件", "*.*")])
+            if not dbc_path:
+                return
+            self.dbc_path.set(dbc_path)
+        try:
+            plan = build_dbc_repair_plan(dbc_path)
+        except Exception as exc:
+            messagebox.showerror("属性扫描失败", str(exc))
+            return
+        if not plan.items:
+            messagebox.showinfo("属性修正", "未发现没有 BA_DEF_ 定义的 BA_ 属性赋值。")
+            return
+
+        preview = "\n".join(
+            f"第 {item.line_number} 行：{item.attribute_name}（{item.scope}）"
+            for item in plan.items[:20]
+        )
+        suffix = "\n……" if len(plan.items) > 20 else ""
+        approved = messagebox.askyesno(
+            "属性修正预览",
+            f"发现 {len(plan.items)} 条没有 BA_DEF_ 定义的属性赋值：\n\n{preview}{suffix}\n\n"
+            "这些属性没有可靠的类型、作用域或枚举定义，工具不会伪造 BA_DEF_。\n"
+            "若确认，工具将只在另存副本中删除上述 BA_ 赋值，使该未定义属性不再阻止 DBC 导入。\n"
+            "原 DBC 不会修改。是否继续另存？",
+        )
+        if not approved:
+            return
+        output = filedialog.asksaveasfilename(
+            title="另存属性修正后的 DBC",
+            initialdir=str(Path(dbc_path).parent),
+            initialfile=f"{Path(dbc_path).stem}_attributes_repaired{Path(dbc_path).suffix}",
+            defaultextension=".dbc",
+            filetypes=[("DBC文件", "*.dbc")],
+        )
+        if not output:
+            return
+        try:
+            saved_path, applied = apply_dbc_repair_plan(
+                plan, output, remove_undefined_attributes=True,
+            )
+            repaired_db = parse_dbc(saved_path)
+            remaining = [
+                item for item in self_check_database(repaired_db, "DBC")
+                if item.rule_id == "DBC_ATTR_UNDEFINED_001"
+            ]
+            if remaining:
+                raise ValueError("另存副本仍包含未定义属性，未报告修复成功。")
+        except Exception as exc:
+            messagebox.showerror("属性修正失败", str(exc))
+            return
+        self.status_var.set(f"属性修正完成：已另存 {Path(saved_path).name}，移除 {len(applied)} 条无定义 BA_ 赋值。")
+        messagebox.showinfo(
+            "属性修正完成",
+            f"已保存：\n{saved_path}\n\n已移除 {len(applied)} 条没有 BA_DEF_ 定义的属性赋值。\n"
+            "请重新执行“开始检查”查看该副本的其余问题。",
+        )
 
     def choose_dbc(self) -> None:
         path = filedialog.askopenfilename(title="选择 DBC 文件", filetypes=[("DBC文件", "*.dbc"), ("所有文件", "*.*")])

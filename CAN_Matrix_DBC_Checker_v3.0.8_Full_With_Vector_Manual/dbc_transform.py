@@ -20,6 +20,13 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 BO_RE = re.compile(r"^(?P<prefix>\s*BO_\s+)(?P<raw_id>\d+)(?P<middle>\s+)(?P<name>[^:]+?)(?P<suffix>\s*:\s*.*)$")
 SG_RE = re.compile(r"^(?P<prefix>\s*SG_\s+)(?P<name>\S+)(?P<suffix>\s+.*)$")
+ATTRIBUTE_DEFINITION_RE = re.compile(
+    r'^\s*BA_DEF_\s+(?:(?P<scope>BU_|BO_|SG_|EV_)\s+)?"(?P<name>[^"]+)"\s+'
+    r'(?:INT|HEX|FLOAT|STRING|ENUM)\b.*;\s*$'
+)
+ATTRIBUTE_ASSIGNMENT_RE = re.compile(
+    r'^\s*BA_\s+"(?P<name>[^"]+)"\s+(?:(?P<scope>BU_|BO_|SG_|EV_)\s+)?(?P<rest>.+?)\s*;\s*$'
+)
 
 
 def format_can_id(can_id: int) -> str:
@@ -146,6 +153,34 @@ class RenamePlan:
     @property
     def blocked_items(self) -> List[RenamePreviewItem]:
         return [item for item in self.items if item.status == "阻塞"]
+
+
+@dataclass(frozen=True)
+class DbcRepairItem:
+    """一条可审阅的 DBC 属性修复建议。
+
+    未定义属性不能靠名称猜测类型或作用域。默认仅报告为“待用户配置”；
+    用户明确选择删除时，才会把对应 BA_ 语句从另存副本中移除。
+    """
+
+    rule_id: str
+    line_number: int
+    attribute_name: str
+    scope: str
+    raw_line: str
+    status: str
+    reason: str
+
+
+@dataclass
+class DbcRepairPlan:
+    source_path: str
+    source_fingerprint: str
+    items: List[DbcRepairItem]
+
+    @property
+    def blocked_items(self) -> List[DbcRepairItem]:
+        return [item for item in self.items if item.status != "可执行"]
 
 
 def _read_text(path: str) -> Tuple[str, str]:
@@ -378,6 +413,77 @@ def _atomic_write(path: Path, content: str, encoding: str) -> None:
         os.replace(temp_path, path)
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def build_dbc_repair_plan(path: str) -> DbcRepairPlan:
+    """识别没有可用 BA_DEF_ 的属性赋值，绝不凭属性名编造定义。"""
+    content, _encoding = _read_text(path)
+    lines = content.splitlines(keepends=True)
+    definitions: set[Tuple[str, str]] = set()
+    for raw_line in lines:
+        match = ATTRIBUTE_DEFINITION_RE.match(_line_without_eol(raw_line))
+        if match:
+            scope = (match.group("scope") or "GLOBAL").rstrip("_").upper()
+            definitions.add((scope, match.group("name").lower()))
+
+    items: List[DbcRepairItem] = []
+    for line_number, raw_line in enumerate(lines, start=1):
+        match = ATTRIBUTE_ASSIGNMENT_RE.match(_line_without_eol(raw_line))
+        if not match:
+            continue
+        scope = (match.group("scope") or "GLOBAL").rstrip("_").upper()
+        name = match.group("name")
+        if (scope, name.lower()) in definitions or ("GLOBAL", name.lower()) in definitions:
+            continue
+        items.append(DbcRepairItem(
+            rule_id="DBC_ATTR_UNDEFINED_001",
+            line_number=line_number,
+            attribute_name=name,
+            scope=scope,
+            raw_line=_line_without_eol(raw_line),
+            status="待用户配置",
+            reason=(
+                f"属性“{name}”没有适用于 {scope} 的 BA_DEF_ 定义；"
+                "无法可靠推断类型、枚举槽位或默认值。"
+            ),
+        ))
+    return DbcRepairPlan(path, file_fingerprint(path), items)
+
+
+def apply_dbc_repair_plan(
+    plan: DbcRepairPlan,
+    output_path: str,
+    *,
+    remove_undefined_attributes: bool = False,
+) -> Tuple[str, Tuple[DbcRepairItem, ...]]:
+    """将用户确认的“删除无定义属性”操作写入另存副本。
+
+    删除未定义 BA_ 赋值会丢失该属性的业务含义，因此必须由调用方显式传入
+    ``remove_undefined_attributes=True``。原 DBC 不会被覆盖。
+    """
+    if file_fingerprint(plan.source_path) != plan.source_fingerprint:
+        raise ValueError("DBC 文件在修复预览后已发生变化；旧预览已失效，请重新检查。")
+    if not plan.items:
+        raise ValueError("没有检测到可处理的未定义属性赋值。")
+    if not remove_undefined_attributes:
+        raise ValueError("未定义属性缺少可靠定义；请提供 BA_DEF_，或明确确认删除这些 BA_ 赋值。")
+
+    source = Path(plan.source_path)
+    target = Path(output_path)
+    if target.resolve() == source.resolve():
+        raise ValueError("属性修复默认另存为新 DBC，避免直接覆盖原文件。")
+    content, encoding = _read_text(plan.source_path)
+    remove_lines = {item.line_number for item in plan.items}
+    repaired = "".join(
+        line for line_number, line in enumerate(content.splitlines(keepends=True), start=1)
+        if line_number not in remove_lines
+    )
+    _atomic_write(target, repaired, encoding)
+
+    remaining = build_dbc_repair_plan(str(target)).items
+    if remaining:
+        raise ValueError("修复后仍存在未定义属性赋值，已停止报告成功。")
+    return str(target), tuple(plan.items)
 
 
 def apply_rename_plan(plan: RenamePlan, config: Dict[str, Any], output_path: str) -> Tuple[str, Dict[str, Any]]:
