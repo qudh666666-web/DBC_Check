@@ -30,7 +30,8 @@
 - `dbc_transform.py`：命名、映射、受控写回和节点补全核心逻辑。
 - `test_dbc_transform.py`：本轮 focused 回归。
 - `rename_config.example.json`：配置示例。
-- 当前提交：`d975cf8`（Add DBC naming and node completion tools）。
+- 核心实现提交：`d975cf8`（Add DBC naming and node completion tools）。
+- 状态与验证记录提交：`bdfba11`（Document implementation status and validation limits）。
 - 原始基线：`b0585c9`（Initialize DBC checker baseline）。
 
 ## 启动方式
