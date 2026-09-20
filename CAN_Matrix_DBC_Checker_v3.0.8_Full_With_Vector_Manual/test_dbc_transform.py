@@ -56,18 +56,18 @@ class DbcTransformTests(unittest.TestCase):
             signal_items = [item for item in plan.items if item.object_type == "信号"]
             self.assertEqual(message_items[0].new_name, "VehicleStatus_can1_0x101")
             signal_names = {(item.can_id, item.old_name): item.new_name for item in signal_items}
-            self.assertEqual(signal_names[(0x101, "DataLenght")], "can1_sig0x101DataLenght")
-            self.assertEqual(signal_names[(0x101, "KeepSignal")], "can1_sig0x101KeepSignal")
+            self.assertEqual(signal_names[(0x101, "DataLenght")], "can1_sig0x101_DataLenght")
+            self.assertEqual(signal_names[(0x101, "KeepSignal")], "can1_sig0x101_KeepSignal")
             self.assertEqual(message_items[1].new_name, "OtherStatus_can1_0x232")
-            self.assertEqual(signal_names[(0x232, "DataLenght")], "can1_sig0x232DataLenght")
+            self.assertEqual(signal_names[(0x232, "DataLenght")], "can1_sig0x232_DataLenght")
             apply_rename_plan(plan, config, str(first))
             first_text = first.read_text(encoding="utf-8")
             self.assertIn("VehicleStatus_can1_0x101", first_text)
-            self.assertIn("can1_sig0x232DataLenght", first_text)
-            self.assertIn("SG_ can1_sig0x101KeepSignal :", first_text)
-            self.assertIn("CM_ SG_ 257 can1_sig0x101DataLenght", first_text)
-            self.assertIn("VAL_ 257 can1_sig0x101DataLenght", first_text)
-            self.assertIn("SIG_GROUP_ 257 DataGroup 1 : can1_sig0x101DataLenght", first_text)
+            self.assertIn("can1_sig0x232_DataLenght", first_text)
+            self.assertIn("SG_ can1_sig0x101_KeepSignal :", first_text)
+            self.assertIn("CM_ SG_ 257 can1_sig0x101_DataLenght", first_text)
+            self.assertIn("VAL_ 257 can1_sig0x101_DataLenght", first_text)
+            self.assertIn("SIG_GROUP_ 257 DataGroup 1 : can1_sig0x101_DataLenght", first_text)
             original_db = checker.parse_dbc(str(source))
             renamed_db = checker.parse_dbc(str(first))
             compared = checker.compare_databases(original_db, renamed_db, [], vector_rules_enabled=False, rename_mapping=config)
@@ -75,11 +75,11 @@ class DbcTransformTests(unittest.TestCase):
 
             config["default_identifier"] = "can2"
             plan2 = build_rename_plan(str(first), config)
-            self.assertEqual(next(i.new_name for i in plan2.items if i.object_type == "信号" and i.old_name == "can1_sig0x101DataLenght"), "can2_sig0x101DataLenght")
+            self.assertEqual(next(i.new_name for i in plan2.items if i.object_type == "信号" and i.old_name == "can1_sig0x101_DataLenght"), "can2_sig0x101_DataLenght")
             apply_rename_plan(plan2, config, str(second))
             second_text = second.read_text(encoding="utf-8")
-            self.assertNotIn("can1_sig0x101can1_sig0x101", second_text)
-            self.assertIn("can2_sig0x101DataLenght", second_text)
+            self.assertNotIn("can1_sig0x101_can1_sig0x101_", second_text)
+            self.assertIn("can2_sig0x101_DataLenght", second_text)
 
     def test_rename_preserves_signal_line_breaks_in_compact_dbc(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -237,7 +237,8 @@ def _looks_generated(name: str, identifier: str, can_id: int, object_type: str) 
     ident = re.escape(identifier)
     if object_type == "message":
         return re.search(rf"_{ident}_{can_hex}$", name) is not None
-    return re.match(rf"^{ident}_sig{can_hex}", name) is not None
+    # 兼容本工具旧版无分隔符的名称，只生成当前要求的 ID 后下划线格式。
+    return re.match(rf"^{ident}_sig{can_hex}(?:_)?", name) is not None
 
 
 def build_rename_plan(path: str, config: Dict[str, Any]) -> RenamePlan:
@@ -287,7 +288,7 @@ def build_rename_plan(path: str, config: Dict[str, Any]) -> RenamePlan:
             status, reason = "跳过", "未启用信号重命名。"
         else:
             status, reason = "可执行", "信号继承所属报文标识；CAN ID 自动来自所属报文。"
-        new_name = f"{identifier}_sig{format_can_id(record.can_id)}{base}"
+        new_name = f"{identifier}_sig{format_can_id(record.can_id)}_{base}"
         if status == "可执行" and base == record.name and new_name == record.name:
             status, reason = "无需修改", "名称已经符合当前配置。"
         items.append(RenamePreviewItem("信号", mapping_key, record.raw_id, record.can_id, record.frame_format, record.name, new_name, identifier, status, reason))
