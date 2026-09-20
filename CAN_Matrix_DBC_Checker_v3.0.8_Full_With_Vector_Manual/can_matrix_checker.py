@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import csv
 import json
+import hashlib
 import math
 import itertools
 import queue
@@ -40,8 +41,23 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 try:
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit("当前 Python 未包含 tkinter，无法启动图形界面。") from exc
+except ImportError:  # pragma: no cover - 允许无GUI环境运行核心解析/自测
+    tk = None
+    filedialog = None
+    messagebox = None
+    ttk = None
+
+from dbc_transform import (
+    apply_node_completion,
+    apply_rename_plan,
+    build_node_completion_plan,
+    build_rename_plan,
+    default_rename_config,
+    load_rename_config,
+    object_key,
+    save_rename_config,
+    signal_key,
+)
 
 try:
     import openpyxl
@@ -55,7 +71,7 @@ except ImportError:
 
 
 APP_NAME = "CAN矩阵-DBC一致性检查工具"
-APP_VERSION = "3.0.8"
+APP_VERSION = "3.0.9"
 VECTOR_MANUAL_VERSION = "1.12"
 VECTOR_MANUAL_TITLE = "Vector Rules for Legacy Communication Descriptions"
 
@@ -2137,7 +2153,7 @@ def self_check_database(db: Database, label: str) -> List[Difference]:
             add("错误", msg, None, "VFrameFormat", f"BO_标识符判定为{msg.id_frame_format}，但VFrameFormat配置为{msg.frame_format}。", "DBC_VFRAME_ID_001", msg.frame_format)
 
         if is_dbc:
-            if msg.sender and msg.sender != "Vector__XXX" and db.nodes and msg.sender not in db.nodes:
+            if msg.sender and msg.sender != "Vector__XXX" and msg.sender not in db.nodes:
                 add("错误", msg, None, "发送节点", f"发送节点“{msg.sender}”未在 BU_ 节点列表中定义。", "DBC_NODE_REF_001", msg.sender)
             if msg.sender and not valid_name_re.fullmatch(msg.sender) and msg.sender != "Vector__XXX":
                 add("错误", msg, None, "发送节点命名", f"发送节点“{msg.sender}”命名不合法。", "DBC_NAME_001", msg.sender)
@@ -2183,7 +2199,7 @@ def self_check_database(db: Database, label: str) -> List[Difference]:
                 add("错误", msg, sig, "信号命名", "SG_ 信号名只能使用英文字母、数字和下划线，且不能以数字开头。", "DBC_NAME_001", sig.name)
             if is_dbc:
                 for receiver in sig.receivers:
-                    if db.nodes and receiver not in db.nodes:
+                    if receiver not in db.nodes:
                         add("错误", msg, sig, "接收节点", f"接收节点“{receiver}”未在 BU_ 节点列表中定义。", "DBC_NODE_REF_002", receiver)
                     if not valid_name_re.fullmatch(receiver):
                         add("错误", msg, sig, "接收节点命名", f"接收节点“{receiver}”命名不合法。", "DBC_NAME_001", receiver)
@@ -3199,8 +3215,29 @@ def compare_databases(
     dbc: Database,
     semantic_rules: Optional[Sequence[Dict[str, Any]]] = None,
     vector_rules_enabled: bool = True,
+    rename_mapping: Optional[Dict[str, Any]] = None,
 ) -> List[Difference]:
     diffs: List[Difference] = []
+
+    mapping = rename_mapping if isinstance(rename_mapping, dict) else {}
+    mapped_messages = mapping.get("mapping", {}).get("messages", {}) if isinstance(mapping.get("mapping", {}), dict) else {}
+    mapped_signals = mapping.get("mapping", {}).get("signals", {}) if isinstance(mapping.get("mapping", {}), dict) else {}
+
+    def dbc_message_key(msg: Message) -> str:
+        raw_id = int(msg.can_id or 0)
+        if msg.id_frame_format == "extended":
+            raw_id |= 0x80000000
+        return object_key(raw_id)
+
+    def mapped_entry(entries: Dict[str, Any], key: str) -> Dict[str, Any]:
+        value = entries.get(key, {})
+        return value if isinstance(value, dict) else {}
+
+    def mapped_name_matches(entries: Dict[str, Any], key: str, left: Any, right: Any) -> bool:
+        entry = mapped_entry(entries, key)
+        original = text(entry.get("original_name"))
+        generated = text(entry.get("generated_name"))
+        return bool(original and generated and text(left) == original and text(right) == generated)
 
     dbc_by_id: Dict[int, List[Message]] = {}
     dbc_by_name: Dict[str, List[Message]] = {}
@@ -3265,6 +3302,7 @@ def compare_databases(
             add_diff("错误", "报文差异", matrix_msg, dbc_msg, "", "CAN ID", format_can_id(matrix_msg.can_id),
                      format_can_id(dbc_msg.can_id), "报文名称匹配，但 CAN ID 不一致。")
 
+        message_mapping_key = dbc_message_key(dbc_msg)
         message_fields = [
             ("报文名称", matrix_msg.name, dbc_msg.name, "name"),
             ("DLC", matrix_msg.dlc, dbc_msg.dlc, "number"),
@@ -3283,6 +3321,8 @@ def compare_databases(
                 equal = nearly_equal(parse_float(matrix_value), parse_float(dbc_value))
             elif kind == "name":
                 equal = norm_name(matrix_value) == norm_name(dbc_value)
+                if field_name == "报文名称":
+                    equal = equal or mapped_name_matches(mapped_messages, message_mapping_key, matrix_value, dbc_value)
             else:
                 equal = norm_enum(matrix_value) == norm_enum(dbc_value)
             if not equal:
@@ -3304,6 +3344,17 @@ def compare_databases(
 
         for matrix_sig in matrix_msg.signals:
             sig_candidates = dbc_sig_by_name.get(norm_name(matrix_sig.name), [])
+            if not sig_candidates:
+                for mapping_key, mapping_value in mapped_signals.items():
+                    if not mapping_key.startswith(message_mapping_key + "|") or not isinstance(mapping_value, dict):
+                        continue
+                    if text(mapping_value.get("original_name")) != text(matrix_sig.name):
+                        continue
+                    generated_name = text(mapping_value.get("generated_name"))
+                    if generated_name:
+                        sig_candidates = dbc_sig_by_name.get(norm_name(generated_name), [])
+                        if sig_candidates:
+                            break
             if not sig_candidates:
                 add_diff(
                     "错误", "缺失信号", matrix_msg, dbc_msg, matrix_sig.name, "信号", matrix_sig.name, "",
@@ -3346,7 +3397,12 @@ def compare_databases(
                 if kind == "number":
                     equal = nearly_equal(parse_float(matrix_value), parse_float(dbc_value))
                 elif kind == "name":
-                    equal = norm_name(matrix_value) == norm_name(dbc_value)
+                    equal = norm_name(matrix_value) == norm_name(dbc_value) or mapped_name_matches(
+                        mapped_signals,
+                        signal_key(message_mapping_key, matrix_sig.name),
+                        matrix_value,
+                        dbc_value,
+                    )
                 elif kind == "enum":
                     equal = norm_enum(matrix_value) == norm_enum(dbc_value)
                 elif kind == "bool":
@@ -3635,6 +3691,7 @@ class CheckerApp:
 
         self.matrix_path = tk.StringVar()
         self.dbc_path = tk.StringVar()
+        self.rename_config_path = tk.StringVar()
         default_rule_file = ensure_default_rules_file()
         self.rules_path = tk.StringVar(value=str(default_rule_file))
         self.semantic_rules_enabled = tk.BooleanVar(value=True)
@@ -3707,6 +3764,8 @@ class CheckerApp:
             button_frame, text="全部一键修改E2E", command=self.auto_fix_all_e2e, state="disabled"
         )
         self.fix_e2e_button.pack(side="left", padx=4)
+        ttk.Button(button_frame, text="命名设置", command=self.open_naming_tool).pack(side="left", padx=4)
+        ttk.Button(button_frame, text="节点补全", command=self.open_node_completion).pack(side="left", padx=4)
         ttk.Button(button_frame, text="查看列映射", command=self.show_mapping).pack(side="left", padx=4)
 
         ttk.Label(top, text="E2E ID表：").grid(row=2, column=0, sticky="w", pady=4)
@@ -4034,6 +4093,213 @@ class CheckerApp:
         ).pack(side="left")
         ttk.Button(bottom, text="关闭", command=win.destroy).pack(side="right")
 
+    def open_naming_tool(self) -> None:
+        """打开真实 CAN ID 命名预览/配置窗口。"""
+        dbc_path = self.dbc_path.get().strip()
+        if not dbc_path or not os.path.isfile(dbc_path):
+            dbc_path = filedialog.askopenfilename(title="选择用于命名的 DBC 文件", filetypes=[("DBC文件", "*.dbc"), ("所有文件", "*.*")])
+            if not dbc_path:
+                return
+            self.dbc_path.set(dbc_path)
+
+        win = tk.Toplevel(self.root)
+        win.title("DBC节点/报文/信号命名设置")
+        win.geometry("1320x720")
+        win.minsize(1000, 560)
+        config = default_rename_config()
+        plan = None
+        row_items: Dict[str, Any] = {}
+
+        top = ttk.Frame(win, padding=10)
+        top.pack(fill="x")
+        top.columnconfigure(1, weight=1)
+        ttk.Label(top, text="DBC文件：").grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Label(top, text=dbc_path).grid(row=0, column=1, columnspan=3, sticky="w", pady=3)
+        ttk.Label(top, text="默认命名标识：").grid(row=1, column=0, sticky="w", pady=3)
+        default_var = tk.StringVar(value="can1")
+        ttk.Entry(top, textvariable=default_var, width=18).grid(row=1, column=1, sticky="w", pady=3)
+        messages_var = tk.BooleanVar(value=True)
+        signals_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top, text="处理报文", variable=messages_var).grid(row=1, column=2, sticky="w", padx=8)
+        ttk.Checkbutton(top, text="处理信号", variable=signals_var).grid(row=1, column=3, sticky="w", padx=8)
+        ttk.Label(top, text="配置JSON：").grid(row=2, column=0, sticky="w", pady=3)
+        config_var = tk.StringVar(value=self.rename_config_path.get().strip())
+        ttk.Entry(top, textvariable=config_var).grid(row=2, column=1, sticky="ew", pady=3)
+
+        controls = ttk.Frame(top)
+        controls.grid(row=2, column=2, columnspan=2, sticky="e")
+        status_var = tk.StringVar(value="ID只读取自当前报文；请先刷新预览。")
+
+        body = ttk.Frame(win, padding=(10, 0, 10, 6))
+        body.pack(fill="both", expand=True)
+        columns = ("type", "frame", "can", "old", "new", "identifier", "status", "reason")
+        tree = ttk.Treeview(body, columns=columns, show="headings", selectmode="extended")
+        headings = {"type": "对象", "frame": "帧身份", "can": "真实CAN ID", "old": "原名称", "new": "新名称", "identifier": "标识", "status": "状态", "reason": "依据/阻塞原因"}
+        widths = {"type": 70, "frame": 75, "can": 100, "old": 220, "new": 285, "identifier": 90, "status": 80, "reason": 360}
+        for col in columns:
+            tree.heading(col, text=headings[col])
+            tree.column(col, width=widths[col], minwidth=55, anchor="w")
+        ybar = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
+        xbar = ttk.Scrollbar(body, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        ybar.grid(row=0, column=1, sticky="ns")
+        xbar.grid(row=1, column=0, sticky="ew")
+        body.rowconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
+
+        override = ttk.Frame(win, padding=(10, 0, 10, 6))
+        override.pack(fill="x")
+        ttk.Label(override, text="选中对象覆盖标识：").pack(side="left")
+        override_var = tk.StringVar()
+        ttk.Entry(override, textvariable=override_var, width=18).pack(side="left", padx=5)
+
+        def render() -> bool:
+            nonlocal plan, config
+            try:
+                config["default_identifier"] = default_var.get().strip()
+                config["targets"] = {"messages": bool(messages_var.get()), "signals": bool(signals_var.get())}
+                plan = build_rename_plan(dbc_path, config)
+            except Exception as exc:
+                status_var.set(str(exc))
+                messagebox.showerror("命名配置错误", str(exc), parent=win)
+                return False
+            for item in tree.get_children():
+                tree.delete(item)
+            row_items.clear()
+            for index, item in enumerate(plan.items):
+                iid = str(index)
+                row_items[iid] = item
+                tree.insert("", "end", iid=iid, values=(item.object_type, item.frame_format, format_can_id(item.can_id), item.old_name, item.new_name, item.identifier, item.status, item.reason))
+            status_var.set(f"预览 {len(plan.items)} 项；可执行 {len(plan.executable_items)} 项；阻塞 {len(plan.blocked_items)} 项。真实 ID 来自 DBC BO_。")
+            return True
+
+        def set_override() -> None:
+            value = override_var.get().strip()
+            selected = [row_items[iid] for iid in tree.selection() if iid in row_items]
+            if not selected:
+                messagebox.showinfo("未选择对象", "请在预览表中选择一个或多个报文/信号。", parent=win)
+                return
+            for item in selected:
+                overrides = config["message_overrides"] if item.object_type == "报文" else config["signal_overrides"]
+                if value:
+                    overrides[item.object_key] = value
+                else:
+                    overrides.pop(item.object_key, None)
+            render()
+
+        def load_config() -> None:
+            nonlocal config
+            path = filedialog.askopenfilename(parent=win, title="加载命名JSON配置", filetypes=[("JSON配置", "*.json"), ("所有文件", "*.*")])
+            if not path:
+                return
+            try:
+                config = load_rename_config(path)
+            except Exception as exc:
+                messagebox.showerror("加载配置失败", str(exc), parent=win)
+                return
+            config_var.set(path)
+            self.rename_config_path.set(path)
+            default_var.set(config.get("default_identifier", "can1"))
+            messages_var.set(bool(config.get("targets", {}).get("messages", True)))
+            signals_var.set(bool(config.get("targets", {}).get("signals", True)))
+            render()
+
+        def save_config() -> bool:
+            config["default_identifier"] = default_var.get().strip()
+            config["targets"] = {"messages": bool(messages_var.get()), "signals": bool(signals_var.get())}
+            path = config_var.get().strip()
+            if not path:
+                path = filedialog.asksaveasfilename(parent=win, title="保存命名JSON配置", defaultextension=".json", filetypes=[("JSON配置", "*.json")])
+            if not path:
+                return False
+            try:
+                save_rename_config(path, config)
+            except Exception as exc:
+                messagebox.showerror("保存配置失败", str(exc), parent=win)
+                return False
+            config_var.set(path)
+            self.rename_config_path.set(path)
+            status_var.set(f"配置已保存：{path}")
+            return True
+
+        def apply() -> None:
+            if not render() or plan is None:
+                return
+            if plan.blocked_items:
+                messagebox.showwarning("存在阻塞项", "预览中存在来源不明、冲突或不支持项，已阻止写回。请先处理阻塞项。", parent=win)
+                return
+            output = filedialog.asksaveasfilename(parent=win, title="另存重命名后的DBC", initialdir=str(Path(dbc_path).parent), initialfile=f"{Path(dbc_path).stem}_renamed{Path(dbc_path).suffix}", defaultextension=".dbc", filetypes=[("DBC文件", "*.dbc")])
+            if not output:
+                return
+            try:
+                saved_path, updated_config = apply_rename_plan(plan, config, output)
+                config = updated_config
+                config_path = config_var.get().strip() or str(Path(saved_path).with_suffix(".rename.json"))
+                save_rename_config(config_path, config)
+                parse_dbc(saved_path)
+            except Exception as exc:
+                messagebox.showerror("命名写回失败", str(exc), parent=win)
+                return
+            self.rename_config_path.set(config_path)
+            status_var.set(f"已另存并重新解析：{saved_path}；映射配置：{config_path}")
+            messagebox.showinfo("命名完成", f"已保存：\n{saved_path}\n\n映射配置：\n{config_path}\n\n原 DBC 未被覆盖。", parent=win)
+
+        tree.bind("<<TreeviewSelect>>", lambda _event: override_var.set(row_items[tree.selection()[0]].identifier if tree.selection() and tree.selection()[0] in row_items else ""))
+        ttk.Button(override, text="设置选中对象", command=set_override).pack(side="left", padx=4)
+        ttk.Button(override, text="清除选中覆盖", command=lambda: (override_var.set(""), set_override())).pack(side="left", padx=4)
+        ttk.Label(override, textvariable=status_var).pack(side="left", padx=12)
+
+        bottom = ttk.Frame(win, padding=(10, 0, 10, 10))
+        bottom.pack(fill="x")
+        ttk.Button(bottom, text="刷新预览", command=render).pack(side="left", padx=3)
+        ttk.Button(bottom, text="加载JSON", command=load_config).pack(side="left", padx=3)
+        ttk.Button(bottom, text="保存JSON", command=save_config).pack(side="left", padx=3)
+        ttk.Button(bottom, text="另存为并应用", command=apply).pack(side="right", padx=3)
+        ttk.Button(bottom, text="关闭", command=win.destroy).pack(side="right", padx=3)
+        render()
+
+    def open_node_completion(self) -> None:
+        """只补入 DBC 中已明确引用但未声明的真实节点。"""
+        dbc_path = self.dbc_path.get().strip()
+        if not dbc_path or not os.path.isfile(dbc_path):
+            dbc_path = filedialog.askopenfilename(title="选择用于节点补全的 DBC 文件", filetypes=[("DBC文件", "*.dbc"), ("所有文件", "*.*")])
+            if not dbc_path:
+                return
+            self.dbc_path.set(dbc_path)
+        try:
+            plan = build_node_completion_plan(dbc_path)
+        except Exception as exc:
+            messagebox.showerror("节点扫描失败", str(exc))
+            return
+        if not plan.missing_nodes:
+            messagebox.showinfo("节点补全", "未发现已明确引用但未声明在 BU_ 中的真实节点。Vector__XXX 不会被当作真实节点补入。")
+            return
+        ok = messagebox.askyesno(
+            "节点补全预览",
+            f"发现以下真实节点未在 BU_ 中声明：\n\n{', '.join(plan.missing_nodes)}\n\n"
+            "将只补入这些明确引用的节点，不会虚构接收者，也不会替换已有收发关系。是否另存为新 DBC？",
+        )
+        if not ok:
+            return
+        output = filedialog.asksaveasfilename(
+            title="另存节点补全后的 DBC",
+            initialdir=str(Path(dbc_path).parent),
+            initialfile=f"{Path(dbc_path).stem}_nodes_completed{Path(dbc_path).suffix}",
+            defaultextension=".dbc",
+            filetypes=[("DBC文件", "*.dbc")],
+        )
+        if not output:
+            return
+        try:
+            saved_path, nodes = apply_node_completion(plan, output)
+            parse_dbc(saved_path)
+        except Exception as exc:
+            messagebox.showerror("节点补全失败", str(exc))
+            return
+        self.status_var.set(f"节点补全完成：已另存 {Path(saved_path).name}，补入 {len(nodes)} 个节点。")
+        messagebox.showinfo("节点补全完成", f"已保存：\n{saved_path}\n\n补入节点：{', '.join(nodes)}")
+
     def choose_dbc(self) -> None:
         path = filedialog.askopenfilename(title="选择 DBC 文件", filetypes=[("DBC文件", "*.dbc"), ("所有文件", "*.*")])
         if path:
@@ -4148,6 +4414,19 @@ class CheckerApp:
                     )
                 self.set_status("正在解析 DBC……")
                 dbc_db = parse_dbc(dbc_path, progress=self.set_status)
+                rename_mapping: Optional[Dict[str, Any]] = None
+                mapping_path = self.rename_config_path.get().strip()
+                if not mapping_path:
+                    sibling_mapping = Path(dbc_path).with_suffix(".rename.json")
+                    mapping_path = str(sibling_mapping) if sibling_mapping.is_file() else ""
+                if mapping_path and os.path.isfile(mapping_path):
+                    loaded_mapping = load_rename_config(mapping_path)
+                    target_fingerprint = loaded_mapping.get("mapping", {}).get("target_fingerprint", "")
+                    if not target_fingerprint or target_fingerprint == hashlib.sha256(Path(dbc_path).read_bytes()).hexdigest():
+                        rename_mapping = loaded_mapping
+                        self.set_status(f"已加载命名映射：{Path(mapping_path).name}；用于避免重命名后的矩阵假缺失。")
+                    else:
+                        self.set_status("命名映射与当前DBC指纹不一致，已忽略旧映射并继续检查。")
                 semantic_rules: List[Dict[str, Any]] = []
                 if semantic_enabled:
                     self.set_status("正在读取AUTOSAR/CAN语义规则……")
@@ -4158,7 +4437,13 @@ class CheckerApp:
                 else:
                     self.set_status("正在逐项比较报文、信号并执行规则……")
                     assert matrix_db is not None
-                    diffs = compare_databases(matrix_db, dbc_db, semantic_rules, vector_rules_enabled=vector_enabled)
+                    diffs = compare_databases(
+                        matrix_db,
+                        dbc_db,
+                        semantic_rules,
+                        vector_rules_enabled=vector_enabled,
+                        rename_mapping=rename_mapping,
+                    )
 
                 e2e_entries: List[E2EIdEntry] = []
                 e2e_mapping: Dict[str, str] = {}
@@ -4541,6 +4826,8 @@ class CheckerApp:
 
 
 def main() -> None:
+    if tk is None:
+        raise SystemExit("当前 Python 未包含 tkinter，无法启动图形界面；核心解析和离线自测仍可运行。")
     root = tk.Tk()
     CheckerApp(root)
     root.mainloop()

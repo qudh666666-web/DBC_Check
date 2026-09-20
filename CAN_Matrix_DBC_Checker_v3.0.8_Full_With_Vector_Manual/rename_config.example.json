@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "default_identifier": "can1",
+  "targets": {
+    "messages": true,
+    "signals": true
+  },
+  "message_overrides": {
+    "standard:0x101": "can2"
+  },
+  "signal_overrides": {
+    "standard:0x101|DataLenght": "can2"
+  },
+  "mapping": {
+    "source_fingerprint": "",
+    "messages": {},
+    "signals": {}
+  }
+}

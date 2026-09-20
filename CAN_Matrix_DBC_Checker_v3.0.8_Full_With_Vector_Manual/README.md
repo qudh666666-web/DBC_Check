@@ -1,4 +1,4 @@
-# CAN矩阵-DBC一致性检查工具 v3.0.7
+# CAN矩阵-DBC一致性检查工具 v3.0.9
 
 Python离线图形工具，支持：
 
@@ -106,3 +106,24 @@ BcpSysStsSigGrp | 0x062D | LonAccrSigGrp | 0x0103
 - 一个Excel里有多路E2E工作表时，可选择“全部可识别工作表”统一导入。
 - 客户表允许不完整：未列出的DBC E2E组不判错；有SignalGroup但Data ID为空/“-”只提示。
 - 同一SignalGroup在不同路/不同Sheet给出不同Data ID时，报冲突并指出来源。
+
+## v3.0.9 DBC命名、节点补全和安全写回
+
+主界面新增“命名设置”和“节点补全”入口。
+
+- 报文格式：`{原始报文名}_{标识}_0x{真实CAN ID}`，例如 `VehicleStatus_can1_0x101`。
+- 信号格式：`{标识}_sig0x{所属报文真实CAN ID}{原始信号名}`，例如 `can1_sig0x101DataLenght`。
+- ID只读展示并自动读取每条 `BO_` 的实际ID；扩展帧只保留实际CAN ID，不把 `0x80000000` 存储标志写入名称。
+- 默认标识、报文覆盖、信号覆盖、仅报文/仅信号处理，以及多选对象批量设置均可在窗口中完成。
+- JSON配置示例见 `rename_config.example.json`。应用后会保存原名到新名映射；重新打开生成后的DBC并加载同一配置，可继续把 `can1` 替换为 `can2`，不会叠加前缀。
+- 写回默认另存为新DBC，预览绑定输入文件指纹；报文名检查全文件冲突，信号名检查所属报文内冲突。注释正文、枚举显示文字和未知语句不做全文替换。
+- “节点补全”仅把 `BO_`发送者和 `SG_`接收者中明确出现、但未在 `BU_` 声明的真实节点补入；不把 `Vector__XXX` 或所有其他节点猜作接收者。
+
+离线验证：
+
+```bat
+D:\Program Files\LibreOffice\program\python.exe test_dbc_transform.py
+D:\Program Files\LibreOffice\program\python.exe self_test.py
+```
+
+图形界面仍需安装包含 Tcl/Tk 的 Python；若仅需运行解析和离线自测，缺少 tkinter 时程序会保留核心导入能力并明确拒绝启动 GUI。
