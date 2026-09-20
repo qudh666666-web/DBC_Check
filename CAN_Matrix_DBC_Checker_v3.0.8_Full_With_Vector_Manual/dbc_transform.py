@@ -488,6 +488,40 @@ def apply_dbc_repair_plan(
     return str(target), tuple(plan.items)
 
 
+def apply_dbc_attribute_definition(
+    plan: DbcRepairPlan,
+    item: DbcRepairItem,
+    definition_tail: str,
+    output_path: str,
+) -> str:
+    """根据用户提供的类型/范围补入 BA_DEF_，不猜测未知属性的语义。"""
+    if item not in plan.items:
+        raise ValueError("属性修复项不属于当前预览。")
+    if file_fingerprint(plan.source_path) != plan.source_fingerprint:
+        raise ValueError("DBC 文件在预览后已发生变化；请重新检查。")
+    tail = definition_tail.strip().rstrip(";").strip()
+    scope_prefix = "" if item.scope == "GLOBAL" else f"{item.scope}_ "
+    definition = f'BA_DEF_ {scope_prefix}"{item.attribute_name}" {tail};'
+    if not ATTRIBUTE_DEFINITION_RE.match(definition):
+        raise ValueError('属性定义格式不正确。例如：INT 0 255，或 ENUM "No","Yes"。')
+    source = Path(plan.source_path)
+    target = Path(output_path)
+    if target.resolve() == source.resolve():
+        raise ValueError("补充属性定义默认另存为新 DBC，避免直接覆盖原文件。")
+    content, encoding = _read_text(plan.source_path)
+    lines = content.splitlines(keepends=True)
+    newline = "\r\n" if "\r\n" in content else "\n"
+    lines.insert(item.line_number - 1, definition + newline)
+    _atomic_write(target, "".join(lines), encoding)
+    remaining = [
+        candidate for candidate in build_dbc_repair_plan(str(target)).items
+        if candidate.attribute_name.lower() == item.attribute_name.lower() and candidate.scope == item.scope
+    ]
+    if remaining:
+        raise ValueError("新增 BA_DEF_ 后属性仍未通过复检，已停止报告成功。")
+    return str(target)
+
+
 def apply_rename_plan(plan: RenamePlan, config: Dict[str, Any], output_path: str) -> Tuple[str, Dict[str, Any]]:
     if file_fingerprint(plan.source_path) != plan.source_fingerprint:
         raise ValueError("DBC 文件在预览后已发生变化；旧预览已失效，请重新读取并预览。")

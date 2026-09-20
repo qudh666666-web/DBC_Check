@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from dbc_transform import (
+    apply_dbc_attribute_definition,
     apply_dbc_repair_plan,
     apply_node_completion,
     apply_rename_plan,
@@ -162,6 +163,23 @@ class DbcTransformTests(unittest.TestCase):
             self.assertNotIn('BA_ "UnknownAttr"', target.read_text(encoding="utf-8"))
             repaired_rules = {item.rule_id for item in checker.self_check_database(checker.parse_dbc(str(target)), "DBC")}
             self.assertNotIn("DBC_ATTR_UNDEFINED_001", repaired_rules)
+
+    def test_unknown_attribute_can_be_defined_from_user_input(self) -> None:
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "unknown_attribute.dbc"
+            target = Path(tmp) / "defined_attribute.dbc"
+            source.write_text(
+                'VERSION ""\nNS_ :\nBS_:\nBU_: TX\n'
+                'BO_ 257 Msg: 8 TX\n SG_ Sig : 0|8@1+ (1,0) [0|255] "" TX\n'
+                'BA_ "ProjectAttr" BO_ 257 5;\n',
+                encoding="utf-8",
+            )
+            plan = build_dbc_repair_plan(str(source))
+            saved = apply_dbc_attribute_definition(plan, plan.items[0], "INT 0 10", str(target))
+            self.assertEqual(saved, str(target))
+            self.assertIn('BA_DEF_ BO_ "ProjectAttr" INT 0 10;', target.read_text(encoding="utf-8"))
+            rule_ids = {item.rule_id for item in checker.self_check_database(checker.parse_dbc(str(target)), "DBC")}
+            self.assertNotIn("DBC_ATTR_UNDEFINED_001", rule_ids)
 
     def test_malformed_attribute_assignment_is_reported_as_dbc_syntax(self) -> None:
         with TemporaryDirectory() as tmp:

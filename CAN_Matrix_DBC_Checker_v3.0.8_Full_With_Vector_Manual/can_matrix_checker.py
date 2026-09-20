@@ -50,6 +50,7 @@ except ImportError:  # pragma: no cover - 允许无GUI环境运行核心解析/�
     ttk = None
 
 from dbc_transform import (
+    apply_dbc_attribute_definition,
     apply_dbc_repair_plan,
     apply_node_completion,
     apply_rename_plan,
@@ -4417,7 +4418,7 @@ class CheckerApp:
         messagebox.showinfo("节点补全完成", f"已保存：\n{saved_path}\n\n补入节点：{', '.join(nodes)}")
 
     def open_attribute_repair(self) -> None:
-        """预览并在用户确认后移除没有 BA_DEF_ 的属性赋值。"""
+        """让用户补充未知属性定义；明确放弃该属性时才允许删除赋值。"""
         dbc_path = self.dbc_path.get().strip()
         if not dbc_path or not os.path.isfile(dbc_path):
             dbc_path = filedialog.askopenfilename(title="选择用于属性修正的 DBC 文件", filetypes=[("DBC文件", "*.dbc"), ("所有文件", "*.*")])
@@ -4438,14 +4439,46 @@ class CheckerApp:
             for item in plan.items[:20]
         )
         suffix = "\n……" if len(plan.items) > 20 else ""
-        approved = messagebox.askyesno(
+        choice = messagebox.askyesnocancel(
             "属性修正预览",
             f"发现 {len(plan.items)} 条没有 BA_DEF_ 定义的属性赋值：\n\n{preview}{suffix}\n\n"
             "这些属性没有可靠的类型、作用域或枚举定义，工具不会伪造 BA_DEF_。\n"
-            "若确认，工具将只在另存副本中删除上述 BA_ 赋值，使该未定义属性不再阻止 DBC 导入。\n"
-            "原 DBC 不会修改。是否继续另存？",
+            "是：填写 BA_DEF_ 的类型/范围或枚举定义并另存。\n"
+            "否：明确放弃这些未知属性，在另存副本删除其 BA_ 赋值。\n"
+            "取消：不修改文件。",
         )
-        if not approved:
+        if choice is None:
+            return
+        if choice:
+            if len(plan.items) != 1:
+                messagebox.showinfo("请逐项处理", "当前有多个未知属性。请先处理一个属性后重新检查，再处理下一项。")
+                return
+            item = plan.items[0]
+            tail = simpledialog.askstring(
+                "补充属性定义",
+                f"为 {item.scope} 属性“{item.attribute_name}”填写定义：\n"
+                "示例：INT 0 255\n示例：ENUM \"No\",\"Yes\"\n示例：STRING",
+                parent=self.root,
+            )
+            if not tail:
+                return
+            output = filedialog.asksaveasfilename(
+                title="另存补充属性定义后的 DBC",
+                initialdir=str(Path(dbc_path).parent),
+                initialfile=f"{Path(dbc_path).stem}_attribute_defined{Path(dbc_path).suffix}",
+                defaultextension=".dbc",
+                filetypes=[("DBC文件", "*.dbc")],
+            )
+            if not output:
+                return
+            try:
+                saved_path = apply_dbc_attribute_definition(plan, item, tail, output)
+                parse_dbc(saved_path)
+            except Exception as exc:
+                messagebox.showerror("补充属性定义失败", str(exc))
+                return
+            self.status_var.set(f"属性定义已补充并另存：{Path(saved_path).name}。")
+            messagebox.showinfo("属性定义完成", f"已保存：\n{saved_path}\n\n请用该副本重新执行检查。")
             return
         output = filedialog.asksaveasfilename(
             title="另存属性修正后的 DBC",
