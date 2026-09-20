@@ -4150,13 +4150,13 @@ class CheckerApp:
         signals_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(top, text="处理报文", variable=messages_var).grid(row=1, column=2, sticky="w", padx=8)
         ttk.Checkbutton(top, text="处理信号", variable=signals_var).grid(row=1, column=3, sticky="w", padx=8)
-        ttk.Label(top, text="配置JSON：").grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Label(top, text="配置JSON（可留空）：").grid(row=2, column=0, sticky="w", pady=3)
         config_var = tk.StringVar(value=self.rename_config_path.get().strip())
         ttk.Entry(top, textvariable=config_var).grid(row=2, column=1, sticky="ew", pady=3)
 
         controls = ttk.Frame(top)
         controls.grid(row=2, column=2, columnspan=2, sticky="e")
-        status_var = tk.StringVar(value="ID只读取自当前报文；请先刷新预览。")
+        status_var = tk.StringVar(value="只需填命名标识，然后点“保存为新DBC”；配置JSON可不填。")
 
         body = ttk.Frame(win, padding=(10, 0, 10, 6))
         body.pack(fill="both", expand=True)
@@ -4252,6 +4252,7 @@ class CheckerApp:
             return True
 
         def apply() -> None:
+            nonlocal config
             if not render() or plan is None:
                 return
             if plan.blocked_items:
@@ -4283,7 +4284,7 @@ class CheckerApp:
         ttk.Button(bottom, text="刷新预览", command=render).pack(side="left", padx=3)
         ttk.Button(bottom, text="加载JSON", command=load_config).pack(side="left", padx=3)
         ttk.Button(bottom, text="保存JSON", command=save_config).pack(side="left", padx=3)
-        ttk.Button(bottom, text="另存为并应用", command=apply).pack(side="right", padx=3)
+        ttk.Button(bottom, text="保存为新DBC", command=apply).pack(side="right", padx=3)
         ttk.Button(bottom, text="关闭", command=win.destroy).pack(side="right", padx=3)
         render()
 
