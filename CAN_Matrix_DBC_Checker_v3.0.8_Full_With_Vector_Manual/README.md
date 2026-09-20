@@ -14,13 +14,13 @@ Python离线图形工具，支持：
 Python 3.9或更高版本。Excel功能需要：
 
 ```bat
-pip install openpyxl
+"%LocalAppData%\Programs\Python\Python312\python.exe" -m pip install -r requirements.txt
 ```
 
 运行：
 
 ```bat
-python can_matrix_checker.py
+run_checker.bat
 ```
 
 或双击 `run_checker.bat`。

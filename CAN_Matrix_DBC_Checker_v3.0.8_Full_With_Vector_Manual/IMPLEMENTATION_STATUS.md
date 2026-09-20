@@ -15,7 +15,7 @@
 - 属性补全/修正的结构化修正项、属性来源展示、ENUM槽位核对和应用依赖尚未实现。
 - 没有真实接收节点时的全局/报文/信号接收者配置入口尚未实现；当前不会虚构接收者。
 - 对所有未支持 DBC 语法的名称引用阻塞扫描、Update Bit 客户E2E联动和更完整的保留语法覆盖仍需补充。
-- GUI 实际冒烟未完成：指定验证解释器没有 `tkinter`，因此无法在本轮声称 GUI 已启动验证；截图中的 Tcl/Tk 测试窗口说明另一 Python 环境可用，但未替代指定解释器验证。
+- 原 LibreOffice 嵌入式 Python 3.12.13 仍没有 `tkinter`；已安装用户范围官方 Python 3.12.10（Tk 8.6），并将 `run_checker.bat` 固定到该解释器。实际创建 `Tk()` 根窗口和短时启动主程序均通过；未进行人工点击级 GUI 验收。
 
 ## 测试结果
 
@@ -23,6 +23,8 @@
 - `D:\Program Files\LibreOffice\program\python.exe test_dbc_transform.py`：4 项通过，覆盖真实ID、重复命名、标准/扩展帧区分、引用同步、空 `BU_` 节点检查及矩阵映射。
 - `D:\Program Files\LibreOffice\program\python.exe self_test.py`：通过；先安装了既有 `requirements.txt` 中的 `openpyxl` 依赖。
 - `import tkinter`：失败，指定解释器缺少 tkinter；未伪装成 GUI 通过。
+- `C:\Users\l\AppData\Local\Programs\Python\Python312\python.exe -c "import tkinter; ...; Tk()"`：通过，Tk 8.6。
+- 使用该 Python 短时启动 `can_matrix_checker.py`：进程正常保持运行，随后结束冒烟进程。
 
 ## 相关文件与提交
 
@@ -36,10 +38,10 @@
 
 ## 启动方式
 
-在源码目录运行（本轮指定验证解释器）：
+在源码目录运行：
 
 ```bat
-D:\Program Files\LibreOffice\program\python.exe can_matrix_checker.py
+run_checker.bat
 ```
 
 也可以双击 `run_checker.bat`。命名配置可通过“命名设置”窗口保存到任意 JSON；应用后默认在生成 DBC 旁保存 `.rename.json` 映射配置。
