@@ -177,6 +177,32 @@ class DbcTransformTests(unittest.TestCase):
             self.assertEqual(len(syntax), 1)
             self.assertIn("BA_", syntax[0].description)
 
+    def test_message_attribute_autofix_uses_existing_definition_and_creates_backup(self) -> None:
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "message_attribute.dbc"
+            source.write_text(
+                'VERSION ""\nNS_ :\nBS_:\nBU_: TX\n'
+                'BO_ 257 Msg: 8 TX\n SG_ Sig : 0|8@1+ (1,0) [0|255] "" TX\n'
+                'BA_DEF_ BO_ "GenMsgCycleTime" INT 0 65535;\n'
+                'BA_DEF_ BO_ "GenMsgSendType" ENUM "Cyclic","NotUsed";\n'
+                'BA_ "GenMsgCycleTime" BO_ 257 0;\n'
+                'BA_ "GenMsgSendType" BO_ 257 0;\n',
+                encoding="utf-8",
+            )
+            db = checker.parse_dbc(str(source))
+            msg = db.messages[0]
+            backup, _change = checker.apply_message_attribute_autofix(
+                str(source), db, msg, "GenMsgCycleTime", 25,
+            )
+            self.assertTrue(Path(backup).is_file())
+            db = checker.parse_dbc(str(source))
+            self.assertEqual(db.messages[0].attributes["genmsgcycletime"], 25)
+            checker.apply_message_attribute_autofix(
+                str(source), db, db.messages[0], "GenMsgSendType", "NotUsed",
+            )
+            repaired = checker.parse_dbc(str(source))
+            self.assertEqual(repaired.messages[0].attributes["genmsgsendtype"], "NotUsed")
+
 
 if __name__ == "__main__":
     unittest.main()

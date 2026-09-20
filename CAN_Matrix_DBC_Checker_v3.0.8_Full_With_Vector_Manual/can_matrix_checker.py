@@ -28,6 +28,7 @@ import itertools
 import queue
 import os
 import shutil
+import tempfile
 from datetime import datetime
 import re
 import sys
@@ -40,11 +41,12 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 try:
     import tkinter as tk
-    from tkinter import filedialog, messagebox, ttk
+    from tkinter import filedialog, messagebox, simpledialog, ttk
 except ImportError:  # pragma: no cover - 允许无GUI环境运行核心解析/自测
     tk = None
     filedialog = None
     messagebox = None
+    simpledialog = None
     ttk = None
 
 from dbc_transform import (
@@ -500,6 +502,89 @@ def apply_e2e_data_length_autofixes(
         raise
 
     return str(backup_path), changes
+
+
+def _dbc_attribute_storage_value(db: "Database", attribute_name: str, value: Any) -> str:
+    """把检查器中的属性值编码回现有 BA_DEF_ 所定义的 DBC 存储形式。"""
+    definition = definition_for(db, "BO", attribute_name)
+    if definition is None:
+        raise ValueError(f"属性“{attribute_name}”缺少 BO_ 级 BA_DEF_ 定义，不能猜测类型后写回。")
+    if definition.value_type == "ENUM":
+        normalized = norm_enum(value)
+        for index, enum_value in enumerate(definition.enum_values):
+            if norm_enum(enum_value) == normalized:
+                return str(index)
+        raise ValueError(f"属性“{attribute_name}”的值“{value_display(value)}”不在枚举定义中。")
+    if definition.value_type in {"INT", "HEX"}:
+        number = parse_int(value)
+        if number is None:
+            raise ValueError(f"属性“{attribute_name}”需要整数值。")
+        return str(number)
+    if definition.value_type == "FLOAT":
+        number = parse_float(value)
+        if number is None:
+            raise ValueError(f"属性“{attribute_name}”需要数值。")
+        return value_display(number)
+    if definition.value_type == "STRING":
+        return '"' + str(value).replace('"', '\\"') + '"'
+    raise ValueError(f"属性“{attribute_name}”的类型“{definition.value_type}”暂不支持自动写回。")
+
+
+def apply_message_attribute_autofix(
+    dbc_path: str,
+    db: "Database",
+    message: "Message",
+    attribute_name: str,
+    value: Any,
+) -> Tuple[str, str]:
+    """对唯一报文补全或替换一个已定义的 BO_ 属性，并保留时间戳备份。"""
+    if message.can_id is None or not message.row_number:
+        raise ValueError("报文没有可定位的 CAN ID/BO_ 行，不能自动写回。")
+    storage_value = _dbc_attribute_storage_value(db, attribute_name, value)
+    path = Path(dbc_path)
+    content, encoding = _read_dbc_text_preserve_encoding(dbc_path)
+    lines = content.splitlines(keepends=True)
+    row_index = int(message.row_number) - 1
+    if row_index < 0 or row_index >= len(lines):
+        raise ValueError("BO_ 行号已失效；请重新检查后再修复。")
+    bo_match = re.match(r"^\s*BO_\s+(\d+)\s+", lines[row_index])
+    if not bo_match:
+        raise ValueError("BO_ 行内容已变化；请重新检查后再修复。")
+    raw_id = int(bo_match.group(1))
+    assignment_re = re.compile(
+        rf'^(\s*BA_\s+"{re.escape(attribute_name)}"\s+BO_\s+)({raw_id})(\s+)(.+?)(\s*;\s*)(\r?\n)?$',
+        re.IGNORECASE,
+    )
+    changed = False
+    for index, line in enumerate(lines):
+        match = assignment_re.match(line)
+        if not match:
+            continue
+        lines[index] = f"{match.group(1)}{match.group(2)}{match.group(3)}{storage_value}{match.group(5)}{match.group(6) or ''}"
+        changed = True
+        break
+    if not changed:
+        newline = "\r\n" if "\r\n" in content else "\n"
+        if lines and not (lines[-1].endswith("\n") or lines[-1].endswith("\r")):
+            lines[-1] += newline
+        lines.append(f'BA_ "{attribute_name}" BO_ {raw_id} {storage_value};{newline}')
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = path.with_name(f"{path.stem}.before_{attribute_name}_{timestamp}{path.suffix}")
+    shutil.copy2(path, backup_path)
+    temp_handle, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    os.close(temp_handle)
+    temp_path = Path(temp_name)
+    try:
+        temp_path.write_text("".join(lines), encoding=encoding, newline="")
+        os.replace(temp_path, path)
+    except Exception:
+        shutil.copy2(backup_path, path)
+        raise
+    finally:
+        temp_path.unlink(missing_ok=True)
+    action = "更新" if changed else "补全"
+    return str(backup_path), f"{action} {message.name} 的 {attribute_name}={storage_value}。"
 
 
 @dataclass
@@ -3747,6 +3832,8 @@ class CheckerApp:
         self._tree_item_details: Dict[str, str] = {}
         # 结果表中“单条一键修改E2E”对应的高置信度修复项。
         self._tree_item_e2e_fixes: Dict[str, Tuple[Message, int, str]] = {}
+        # 非E2E的一键修复项；具体动作由规则ID和当前检查结果决定。
+        self._tree_item_autofix_diffs: Dict[str, Difference] = {}
 
         self._build_ui()
         self.root.after(50, self._poll_ui_queue)
@@ -4667,7 +4754,7 @@ class CheckerApp:
         self.start_check()
 
     def _on_tree_action_click(self, event: tk.Event) -> None:
-        """点击结果表“操作”列中的“一键修改”时，只修复当前E2E项。"""
+        """点击结果表“操作”列时执行当前行的安全修复或配置弹窗。"""
         try:
             if self.tree.identify_region(event.x, event.y) != "cell":
                 return
@@ -4677,9 +4764,10 @@ class CheckerApp:
             action_column = f"#{columns.index('action') + 1}"
             if not row_id or column_id != action_column:
                 return
-            if row_id not in self._tree_item_e2e_fixes:
-                return
-            self.auto_fix_one_e2e(row_id)
+            if row_id in self._tree_item_e2e_fixes:
+                self.auto_fix_one_e2e(row_id)
+            elif row_id in self._tree_item_autofix_diffs:
+                self.auto_fix_one_difference(row_id)
         except (tk.TclError, ValueError):
             return
 
@@ -4711,6 +4799,63 @@ class CheckerApp:
             f"备份 {Path(backup_path).name}。正在重新检查……"
         )
         # 单条修改不再弹二次确认/完成框，真正做到点一次即修改；原文件始终有备份。
+        self.start_check()
+
+    def auto_fix_one_difference(self, tree_item_id: str) -> None:
+        """处理节点、周期及可由现有定义确定的显式 BO_ 属性。"""
+        diff = self._tree_item_autofix_diffs.get(tree_item_id)
+        if diff is None:
+            return
+        if diff.rule_id in {"DBC_NODE_REF_001", "DBC_NODE_REF_002"}:
+            # 节点名称已经在 BO_/SG_ 中明确出现，节点补全窗口会显示全部缺失节点并另存。
+            self.open_node_completion()
+            return
+        if diff.rule_id == "DBC_ATTR_UNDEFINED_001":
+            # 没有 BA_DEF_ 时无法猜类型；复用属性处理窗口向用户说明并要求确认。
+            self.open_attribute_repair()
+            return
+
+        dbc_path = self.dbc_path.get().strip()
+        if not dbc_path or not os.path.isfile(dbc_path) or self.dbc_db is None:
+            messagebox.showwarning("缺少DBC", "请先选择 DBC 并完成一次检查。")
+            return
+        message = next(
+            (item for item in self.dbc_db.messages
+             if item.can_id == diff.can_id and item.name == diff.message_name),
+            None,
+        )
+        if message is None:
+            messagebox.showerror("修复定位失败", "检查结果对应的报文已变化；请重新检查后再修复。")
+            return
+
+        attribute_name = ""
+        value: Any = None
+        if diff.rule_id == "DBC_TX_CONFLICT_001":
+            attribute_name, value = "GenMsgCycleTime", 0
+        elif diff.rule_id in {"DBC_TX_EXPLICIT_001", "DBC_TX_EXPLICIT_002"}:
+            attribute_name, value = diff.field_name, diff.dbc_value
+            if value in (None, ""):
+                messagebox.showinfo("需要填写", f"{message.name} 的 {attribute_name} 没有可继承的有效值，请填写后再修复。")
+                return
+        elif diff.rule_id == "DBC_TX_CYCLE_001":
+            value = simpledialog.askinteger(
+                "填写周期", f"{message.name}（{format_can_id(message.can_id)}）需要大于 0 的 GenMsgCycleTime（ms）：",
+                parent=self.root, minvalue=1,
+            )
+            if value is None:
+                return
+            attribute_name = "GenMsgCycleTime"
+        else:
+            return
+
+        try:
+            backup_path, description = apply_message_attribute_autofix(
+                dbc_path, self.dbc_db, message, attribute_name, value,
+            )
+        except Exception as exc:
+            messagebox.showerror("一键修复失败", str(exc))
+            return
+        self.status_var.set(f"一键修复完成：{description} 已备份 {Path(backup_path).name}。正在重新检查……")
         self.start_check()
 
     def _check_failed(self, exc: Exception, detail: str) -> None:
@@ -4784,7 +4929,8 @@ class CheckerApp:
             self.tree.delete(item)
         self._tree_item_details.clear()
         self._tree_item_e2e_fixes.clear()
-        self._set_detail_text("单击上方任意检查项，可在这里查看完整内容；E2E项如显示“一键修改”，可直接点击该单元格修复。")
+        self._tree_item_autofix_diffs.clear()
+        self._set_detail_text("单击上方任意检查项，可在这里查看完整内容；“操作”列出现按钮文字时，可直接点击修复或填写缺失值。")
         e2e_fix_by_can_id: Dict[int, Tuple[Message, int, str]] = {}
         if self.dbc_db is not None:
             for fix in collect_e2e_data_length_autofixes(self.dbc_db):
@@ -4818,6 +4964,7 @@ class CheckerApp:
                 continue
             action_text = ""
             action_fix: Optional[Tuple[Message, int, str]] = None
+            generic_action = False
             can_id_int = int(diff.can_id) if diff.can_id is not None else None
             # 同一报文可能同时命中DBC自检和Vector规则。每个E2E只显示一个“一键修改”，避免重复按钮。
             if (
@@ -4829,6 +4976,18 @@ class CheckerApp:
                 action_text = "一键修改"
                 action_fix = e2e_fix_by_can_id[can_id_int]
                 e2e_action_seen.add(can_id_int)
+            elif diff.rule_id in {"DBC_NODE_REF_001", "DBC_NODE_REF_002"}:
+                action_text = "补全节点"
+                generic_action = True
+            elif diff.rule_id == "DBC_ATTR_UNDEFINED_001":
+                action_text = "处理属性"
+                generic_action = True
+            elif diff.rule_id in {"DBC_TX_CONFLICT_001", "DBC_TX_EXPLICIT_001", "DBC_TX_EXPLICIT_002"}:
+                action_text = "一键修复"
+                generic_action = True
+            elif diff.rule_id == "DBC_TX_CYCLE_001":
+                action_text = "填写周期"
+                generic_action = True
             values = (
                 diff.severity,
                 wrap_tree_cell(diff.category, 14, 2),
@@ -4850,6 +5009,16 @@ class CheckerApp:
                 _msg, bits, reason = action_fix
                 detail += f"\n操作：一键修改 E2EDataLength -> {bits} bit\n建议依据：{reason}"
                 self._tree_item_e2e_fixes[iid] = action_fix
+            elif generic_action:
+                self._tree_item_autofix_diffs[iid] = diff
+                if diff.rule_id in {"DBC_NODE_REF_001", "DBC_NODE_REF_002"}:
+                    detail += "\n操作：补全当前 DBC 已明确引用、但 BU_ 缺失的节点。"
+                elif diff.rule_id == "DBC_ATTR_UNDEFINED_001":
+                    detail += "\n操作：属性类型不明，打开属性处理窗口，由你确认删除或补充定义。"
+                elif diff.rule_id == "DBC_TX_CYCLE_001":
+                    detail += "\n操作：周期值无法从 DBC 推断，点击后填写大于 0 的毫秒值。"
+                else:
+                    detail += "\n操作：根据当前已定义的属性值直接写回；原 DBC 会自动备份。"
             self._tree_item_details[iid] = detail
 
         if inserted_count == 0 and self.differences:
