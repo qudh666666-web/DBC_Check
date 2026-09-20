@@ -362,6 +362,7 @@ def _replace_structured_references(
 
     for line in lines:
         plain = _line_without_eol(line)
+        eol = line[len(plain):]
         bo = BO_RE.match(plain)
         if bo:
             raw_id = int(bo.group("raw_id"))
@@ -378,27 +379,27 @@ def _replace_structured_references(
 
         # SG_ 定义：只改第一个信号名 token，不动接收节点、单位和其它文本。
         if re.match(r"^\s*SG_\s+", plain) and not re.match(r"^\s*SG_(?:MUL_VAL|VALTYPE|GROUP)_", plain):
-            signal_match = re.match(r"^(\s*SG_\s+)(\S+)(.*)$", line)
+            signal_match = re.match(r"^(\s*SG_\s+)(\S+)(.*)$", plain)
             if signal_match and signal_match.group(2) in signal_map:
-                line = f"{signal_match.group(1)}{signal_map[signal_match.group(2)]}{signal_match.group(3)}"
+                line = f"{signal_match.group(1)}{signal_map[signal_match.group(2)]}{signal_match.group(3)}{eol}"
         elif re.match(r"^\s*CM_\s+SG_\s+\d+\s+\S+", plain):
-            match = re.match(r"^(\s*CM_\s+SG_\s+)(\d+)(\s+)(\S+)(.*)$", line)
+            match = re.match(r"^(\s*CM_\s+SG_\s+)(\d+)(\s+)(\S+)(.*)$", plain)
             reference_map = signal_map_for(object_key(int(match.group(2)))) if match else {}
             if match and match.group(4) in reference_map:
-                line = f"{match.group(1)}{match.group(2)}{match.group(3)}{reference_map[match.group(4)]}{match.group(5)}"
+                line = f"{match.group(1)}{match.group(2)}{match.group(3)}{reference_map[match.group(4)]}{match.group(5)}{eol}"
         elif re.match(r"^\s*BA_\s+\"[^\"]+\"\s+SG_\s+\d+\s+\S+", plain):
-            match = re.match(r"^(\s*BA_\s+\"[^\"]+\"\s+SG_\s+)(\d+)(\s+)(\S+)(.*)$", line)
+            match = re.match(r"^(\s*BA_\s+\"[^\"]+\"\s+SG_\s+)(\d+)(\s+)(\S+)(.*)$", plain)
             reference_map = signal_map_for(object_key(int(match.group(2)))) if match else {}
             if match and match.group(4) in reference_map:
-                line = f"{match.group(1)}{match.group(2)}{match.group(3)}{reference_map[match.group(4)]}{match.group(5)}"
+                line = f"{match.group(1)}{match.group(2)}{match.group(3)}{reference_map[match.group(4)]}{match.group(5)}{eol}"
         elif re.match(r"^\s*(?:VAL_|SIG_VALTYPE_|SG_MUL_VAL_)\s+\d+\s+\S+", plain):
-            match = re.match(r"^(\s*(?:VAL_|SIG_VALTYPE_|SG_MUL_VAL_)\s+)(\d+)(\s+)(\S+)(.*)$", line)
+            match = re.match(r"^(\s*(?:VAL_|SIG_VALTYPE_|SG_MUL_VAL_)\s+)(\d+)(\s+)(\S+)(.*)$", plain)
             reference_map = signal_map_for(object_key(int(match.group(2)))) if match else {}
             if match and match.group(4) in reference_map:
-                line = f"{match.group(1)}{match.group(2)}{match.group(3)}{reference_map[match.group(4)]}{match.group(5)}"
+                line = f"{match.group(1)}{match.group(2)}{match.group(3)}{reference_map[match.group(4)]}{match.group(5)}{eol}"
         elif re.match(r"^\s*SIG_GROUP_\s+\d+\s+\S+", plain):
             group_id = re.match(r"^\s*SIG_GROUP_\s+(\d+)", plain)
-            line = _replace_members(line, signal_map_for(object_key(int(group_id.group(1))) if group_id else None))
+            line = _replace_members(plain, signal_map_for(object_key(int(group_id.group(1))) if group_id else None)) + eol
         output.append(line)
     return output
 

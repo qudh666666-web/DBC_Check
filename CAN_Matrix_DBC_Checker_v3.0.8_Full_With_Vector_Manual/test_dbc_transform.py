@@ -81,6 +81,25 @@ class DbcTransformTests(unittest.TestCase):
             self.assertNotIn("can1_sig0x101can1_sig0x101", second_text)
             self.assertIn("can2_sig0x101DataLenght", second_text)
 
+    def test_rename_preserves_signal_line_breaks_in_compact_dbc(self) -> None:
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "compact.dbc"
+            target = Path(tmp) / "compact_renamed.dbc"
+            # 真实 DBC 通常连续书写 SG_；不能依赖样例中的空白行来保留换行。
+            source.write_text(DBC_TEXT.replace("\n\n", "\n"), encoding="utf-8")
+            original = checker.parse_dbc(str(source))
+            plan = build_rename_plan(str(source), default_rename_config())
+            apply_rename_plan(plan, default_rename_config(), str(target))
+            renamed = checker.parse_dbc(str(target))
+            self.assertEqual(
+                sum(len(message.signals) for message in renamed.messages),
+                sum(len(message.signals) for message in original.messages),
+            )
+            self.assertEqual(
+                len([line for line in target.read_text(encoding="utf-8").splitlines() if line.lstrip().startswith("SG_ ")]),
+                sum(len(message.signals) for message in original.messages),
+            )
+
     def test_config_roundtrip_and_node_completion(self) -> None:
         with TemporaryDirectory() as tmp:
             source = Path(tmp) / "source.dbc"
